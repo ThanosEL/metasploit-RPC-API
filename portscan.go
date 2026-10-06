@@ -53,7 +53,7 @@ func main() {
 	}
 	target := os.Args[1]
 
-	start, end := 1, 65535 // defaults
+	start, end := 1, 1024 // defaults
 	if len(os.Args) >= 3 {
 		start, _ = strconv.Atoi(os.Args[2])
 	}
