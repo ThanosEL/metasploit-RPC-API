@@ -20,6 +20,32 @@ import db
 app = Flask(__name__)
 
 
+_NOISE = ("Collecting exploit ", "Never expose this VM",
+          "msfdev[at]metasploit", "Login with msfadmin")
+
+
+def _is_banner_art(line):
+    s = line.strip()
+    if len(s) < 8:
+        return False
+    art = sum(c in "_|\\/.`'-() " for c in s)
+    return art / len(s) > 0.7
+
+
+def strip_noise(text):
+    """Drops progress spam and the target's echoed login-banner ASCII art."""
+    if not text:
+        return text
+    out = []
+    for ln in text.splitlines():
+        if any(n in ln for n in _NOISE):
+            continue
+        if _is_banner_art(ln):
+            continue
+        out.append(ln)
+    return "\n".join(out)
+
+
 def classify(raw_output):
     """Classifies a module result from its output markers.
 
@@ -93,8 +119,14 @@ BASE_CSS = """
   .badge {
     display: inline-block; padding: 2px 8px; border-radius: 3px;
     font-size: 0.72rem; font-weight: 700; color: #080a0b; text-transform: uppercase;
-    background: var(--other);   /* fallback; JS assigns a per-service color */
+    background: var(--other);   /* fallback; JS assigns a per-name color */
   }
+  .svc-smb { background: var(--smb); }
+  .svc-http { background: var(--http); }
+  .svc-https { background: var(--https); }
+  .svc-ssh { background: var(--ssh); }
+  .svc-ftp { background: #ffb86c; }
+  .svc-other { background: var(--other); }
 
   details { margin: 8px 0 0; }
   summary {
@@ -148,8 +180,8 @@ INDEX_HTML = """
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Enum Results</title>""" + BASE_CSS + """</head><body>
 <div class="wrap">
-  <h1>Enumeration Results</h1>
-  <p class="muted">Targets scanned by the pipeline</p>
+  <h1>Targets</h1>
+  <p class="muted">Pick a target to see its ports, enumeration and post-exploitation</p>
 
   {% if workspaces %}
     {% for w in workspaces %}
@@ -157,7 +189,9 @@ INDEX_HTML = """
         <div>
           <a href="/workspace/{{ w['workspace'] }}"><strong>{{ w['workspace'] }}</strong></a>
         </div>
-        <span class="muted">{{ w['n'] }} findings</span>
+        <span class="muted">
+          {{ w['enum_n'] }} enum{% if w['post_n'] %} &middot; {{ w['post_n'] }} post{% endif %}
+        </span>
       </div>
     {% endfor %}
   {% else %}
@@ -228,26 +262,47 @@ WORKSPACE_HTML = """
       </details>
     </div>
   {% endfor %}
+
+  {% if post %}
+  <h2 style="font-size:1.1rem; margin:28px 0 4px;">Post-Exploitation</h2>
+  <p class="muted" style="margin:0 0 8px;">
+    Modules run against open sessions ({{ post|length }} result(s))
+  </p>
+  {% for p in post %}
+    <div class="card finding"
+         data-text="{{ (p['os'] ~ ' ' ~ p['module'] ~ ' ' ~ p['raw_output'])|lower }}">
+      <div class="ws-row">
+        <div>
+          <span class="badge" data-service="{{ p['os'] or 'post' }}">{{ p['os'] or 'post' }}</span>
+          <strong>{{ p['module'] }}</strong>
+          <span class="muted">session {{ p['session_id'] }} @ {{ p['target'] }}</span>
+        </div>
+        <span class="status st-{{ p['status'] }}">
+          {% if p['status'] == 'found' %}&#9679; found
+          {% elif p['status'] == 'failed' %}&#9679; failed
+          {% else %}&#9679; ok{% endif %}
+        </span>
+      </div>
+      <details>
+        <summary>output</summary>
+        <pre>{{ p['raw_output'] }}</pre>
+      </details>
+    </div>
+  {% endfor %}
+  {% endif %}
 </div>
 
 <script>
-// Give each service a stable, unique color derived from its name.
-// Same name -> same color every time, no CSS needed when you add a service.
+// Stable, unique color per service/OS name — no CSS needed for new ones.
 function colorForService(name) {
   let hash = 0;
-  for (let i = 0; i < name.length; i++) {
+  for (let i = 0; i < name.length; i++)
     hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const hue = Math.abs(hash) % 360;
-  // Fixed saturation/lightness keeps badges readable on the dark theme
-  // and consistent with the neon palette (dark text sits on top).
-  return `hsl(${hue}, 70%, 62%)`;
+  return `hsl(${Math.abs(hash) % 360}, 70%, 62%)`;
 }
-
-// Paint every badge (findings cards + ports table) by its service name.
 document.querySelectorAll('[data-service]').forEach(el => {
-  const svc = el.getAttribute('data-service');
-  if (svc && svc !== '?') el.style.background = colorForService(svc);
+  const s = el.getAttribute('data-service');
+  if (s && s !== '?') el.style.background = colorForService(s);
 });
 
 function filterCards() {
@@ -276,18 +331,27 @@ def index():
 def workspace(name):
     findings = db.get_findings(name)
     services = db.get_services(name)
-    if not findings and not services:
+    post = db.get_post_findings(name)
+    if not findings and not services and not post:
         abort(404)
     # Attach a status to each finding so the template can badge it
     findings = [dict(f, status=classify(f["raw_output"])) for f in findings]
+    # Clean post output of per-item progress spam before displaying
+    post = [dict(p, raw_output=strip_noise(p["raw_output"]),
+                 status=classify(p["raw_output"])) for p in post]
     stats = summarize(services, findings)
     return render_template_string(
         WORKSPACE_HTML, workspace=name, findings=findings,
-        services=services, stats=stats
+        services=services, stats=stats, post=post
     )
 
 
 if __name__ == "__main__":
+    import sys
     db.init_db()  # make sure the DB/table exists
-    print("[*] Open http://127.0.0.1:5000 in your browser")
-    app.run(debug=True, host="127.0.0.1", port=5000)
+    # Debug is OFF by default (it exposes tracebacks). Pass --debug while
+    # developing to get auto-reload and detailed error pages.
+    debug = "--debug" in sys.argv
+    print("[*] Open http://127.0.0.1:5000 in your browser"
+          + ("  (debug on)" if debug else ""))
+    app.run(debug=debug, host="127.0.0.1", port=5000)

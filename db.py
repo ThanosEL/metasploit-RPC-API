@@ -44,6 +44,17 @@ CREATE TABLE IF NOT EXISTS services (
     info       TEXT,                -- version/banner, e.g. "Apache 2.2.8"
     enumerated INTEGER DEFAULT 0    -- 1 if we ran enumeration on this service
 );
+
+CREATE TABLE IF NOT EXISTS post_findings (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace   TEXT,               -- target group name (optional)
+    session_id  TEXT,               -- the msf session the module ran against
+    target      TEXT,               -- the session's host
+    os          TEXT,               -- linux / windows / osx
+    module      TEXT,               -- which post module
+    raw_output  TEXT,               -- full clean module output
+    timestamp   TEXT DEFAULT (datetime('now'))
+);
 """
 
 
@@ -152,11 +163,69 @@ def get_findings(workspace):
     return rows
 
 
-def list_workspaces():
-    """Returns each workspace in the DB with how many findings it has."""
+def clear_post(workspace, session_id):
+    """Deletes post findings for one workspace+session (replace strategy)."""
+    conn = connect()
+    conn.execute(
+        "DELETE FROM post_findings WHERE workspace = ? AND session_id = ?",
+        (workspace, str(session_id)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def save_post_findings(rows):
+    """Inserts many post findings.
+
+    Each dict: workspace, session_id, target, os, module, raw_output
+    """
+    conn = connect()
+    conn.executemany(
+        """
+        INSERT INTO post_findings
+            (workspace, session_id, target, os, module, raw_output)
+        VALUES
+            (:workspace, :session_id, :target, :os, :module, :raw_output)
+        """,
+        rows,
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_post_findings(workspace):
+    """Returns all post findings for a workspace."""
     conn = connect()
     cur = conn.execute(
-        "SELECT workspace, COUNT(*) AS n FROM findings GROUP BY workspace ORDER BY workspace"
+        "SELECT * FROM post_findings WHERE workspace = ? ORDER BY session_id, module",
+        (workspace,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def list_workspaces():
+    """Returns each workspace with its enum-finding and post-finding counts.
+
+    Unions both tables so a workspace shows up even if it only has one kind,
+    and reports separate counts (enum vs post).
+    """
+    conn = connect()
+    cur = conn.execute(
+        """
+        SELECT ws AS workspace,
+               SUM(enum_n) AS enum_n,
+               SUM(post_n) AS post_n
+        FROM (
+            SELECT workspace AS ws, COUNT(*) AS enum_n, 0 AS post_n
+              FROM findings GROUP BY workspace
+            UNION ALL
+            SELECT workspace AS ws, 0 AS enum_n, COUNT(*) AS post_n
+              FROM post_findings GROUP BY workspace
+        )
+        GROUP BY ws ORDER BY ws
+        """
     )
     rows = cur.fetchall()
     conn.close()

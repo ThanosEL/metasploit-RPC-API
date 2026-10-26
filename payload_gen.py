@@ -50,10 +50,13 @@ CATALOG = {
     },
     "linux": {
         "payloads": {
-            "meterpreter reverse_tcp": "linux/x64/meterpreter/reverse_tcp",
-            "meterpreter (x86) reverse_tcp": "linux/x86/meterpreter/reverse_tcp",
-            "shell reverse_tcp": "linux/x64/shell/reverse_tcp",
-            "shell bind_tcp": "linux/x64/shell/bind_tcp",
+            "meterpreter reverse_tcp (x64)": "linux/x64/meterpreter/reverse_tcp",
+            "meterpreter reverse_tcp (x86)": "linux/x86/meterpreter/reverse_tcp",
+            "shell reverse_tcp (x64)": "linux/x64/shell/reverse_tcp",
+            "shell reverse_tcp (x86)": "linux/x86/shell/reverse_tcp",
+            # single-stage, tiny — best for very old / minimal hosts
+            "shell_reverse_tcp (x86, tiny)": "linux/x86/shell_reverse_tcp",
+            "shell bind_tcp (x86)": "linux/x86/shell/bind_tcp",
         },
         "formats": ["elf", "raw"],
     },

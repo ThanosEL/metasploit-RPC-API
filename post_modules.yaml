@@ -1,0 +1,21 @@
+linux:
+  - post/linux/gather/enum_system        # kernel, distro, mounts, cron...
+  - post/linux/gather/enum_configs       # service config files
+  - post/linux/gather/enum_network       # interfaces, routes, connections
+  - post/linux/gather/enum_users_history # shell history, sudoers
+  - post/linux/gather/hashdump           # /etc/shadow hashes (needs root)
+
+windows:
+  - post/windows/gather/enum_logged_on_users
+  - post/windows/gather/enum_applications
+  - post/windows/gather/checkvm          # is it a VM?
+  - post/windows/gather/enum_shares
+  - post/windows/gather/hashdump         # SAM hashes (needs SYSTEM)
+
+osx:
+  - post/osx/gather/enum_osx
+
+# Modules that work on any platform
+multi:
+  - post/multi/gather/env                        # environment variables
+  - post/multi/recon/local_exploit_suggester     # privesc paths — very useful!
