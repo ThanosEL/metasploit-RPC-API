@@ -276,25 +276,28 @@ enum_results.db →  clean output of every module, one database for all targets
 
 The service name from `nmap -sV` (e.g. `netbios-ssn`, `ssl/https`) is what
 decides which modules run — not the port number. So a web server on a
-non-standard port (e.g. Tomcat on 8180) is still correctly treated as HTTP.
+non-standard port (e.g. Tomcat on 8180) is still correctly treated as HTTP, and
+SMB on both 139 and 445 is run once (identical result).
 
-Only **read-only enumeration** auxiliaries are run — no brute-force or login
+Only **read-only enumeration** auxiliaries are run — no brute-force or `*_login`
 modules.
 
 ### Files
 - **db.py** — the SQLite storage layer. All SQL lives here; other scripts just
   call its functions (`init_db`, `save_findings`, `get_findings`, ...).
+- **enum_modules.yaml** — the service → modules map (data, not code).
 - **enumerate.py** — reads a workspace's services, runs the mapped auxiliaries
   through an RPC console, cleans the output, and saves it to the database.
 
 ### The database
 One file, `enum_results.db`, holds findings for **all** targets. Rows are
-separated by the `workspace` column, so many targets live in the same table:
+separated by the `workspace` column, so many targets live in the same tables
+(`findings` and `services`):
 
 ```
-workspace        target          port  service  module          ...
+workspace        target          port  service  module
 metasploitable2  192.168.25.129  22    ssh      ssh_version
-metasploitable2  192.168.25.129  80    http     dir_scanner
+metasploitable2  192.168.25.129  139   smb      smb_enumshares
 kioptrix         192.168.X.X     22    ssh      ssh_version
 ```
 
@@ -319,7 +322,9 @@ python3 enumerate.py metasploitable2 --dry-run
 python3 enumerate.py metasploitable2
 ```
 
-### Inspecting results (until view.py exists)
+### Inspecting results
+Browse with `app.py` (web) — see **Viewing results**.
+Or query the database directly:
 ```bash
 # All findings for a target
 sqlite3 enum_results.db \
@@ -340,27 +345,49 @@ sqlite3 enum_results.db \
 ```
 
 ### Extending the module map
-The service → auxiliaries map lives in `enumerate.py` as `ENUM_MODULES`. Add
-services and modules as needed (read-only enumeration only):
+The service → auxiliaries map lives in **`enum_modules.yaml`** (data, not code),
+so you extend it without touching any script. Read-only enumeration only:
 
-```python
-ENUM_MODULES = {
-    "smb":  ["scanner/smb/smb_version", "scanner/smb/smb_enumshares", ...],
-    "http": ["scanner/http/http_version", "scanner/http/dir_scanner", ...],
-    "ssh":  ["scanner/ssh/ssh_version"],
-    # add more, e.g.:
-    # "ftp":   ["scanner/ftp/ftp_version", "scanner/ftp/anonymous"],
-    # "smtp":  ["scanner/smtp/smtp_version", "scanner/smtp/smtp_enum"],
-    # "mysql": ["scanner/mysql/mysql_version"],
-}
+```yaml
+smb:
+  no_rport: true          # SMB uses 139/445 internally, rejects RPORT
+  modules:
+    - scanner/smb/smb_version
+    - scanner/smb/smb_enumshares
+
+http:
+  modules:
+    - scanner/http/http_version
+    - scanner/http/http_header
+    - scanner/http/robots_txt
+
+ssh:
+  modules:
+    - scanner/ssh/ssh_version
+
+# add more, e.g.:
+# ftp:
+#   modules:
+#     - scanner/ftp/ftp_version
+#     - scanner/ftp/ftp_anonymous   # anonymous-login CHECK (enum, not brute)
+# mysql:
+#   modules:
+#     - scanner/mysql/mysql_version
 ```
 
-If a service has no mapping, it's skipped (shown in `--dry-run`). New service
-names may need a line in `normalize_service()` so they map to a known key.
+Most services just work once added — `enumerate.py` matches nmap's service name
+to a YAML key directly (`ftp`, `mysql`, `smtp`…). Only odd names (like SMB's
+`netbios-ssn`) need a line in `SERVICE_ALIASES` in `enumerate.py`. A service
+with no mapping is skipped (visible in `--dry-run`).
+
+> ⚠️ Verify a module exists before adding it:
+> `ls /usr/share/metasploit-framework/modules/auxiliary/scanner/<service>/`.
+> Keep `*_login` / brute-force modules out — enumeration only.
 
 ### Dependencies
-Only Python's built-in `sqlite3` (no extra package). The `sqlite3` CLI is handy
-for inspecting the DB:
+Enumeration adds `pyyaml` (for the config); storage uses Python's built-in
+`sqlite3` (no package). All Python deps are in `requirements.txt`. The `sqlite3`
+CLI is handy for inspecting the DB:
 ```bash
 sudo apt install sqlite3   # optional, for the command-line viewer
 ```

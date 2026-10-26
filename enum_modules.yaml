@@ -1,0 +1,28 @@
+smb:
+  no_rport: true          # SMB modules use 139/445 internally, reject RPORT
+  modules:
+    - scanner/smb/smb_version
+    - scanner/smb/smb_enumshares
+    # - scanner/smb/smb_enumusers   # disabled: uses SAMR, fails on old Samba
+
+http:
+  modules:
+    - scanner/http/http_version
+    - scanner/http/http_header
+    - scanner/http/robots_txt
+    # web directory brute-forcing is done separately (gobuster/ffuf), not here
+
+https:
+  modules:
+    - scanner/http/http_version
+    - scanner/http/http_header
+    - scanner/http/robots_txt
+
+ssh:
+  modules:
+    - scanner/ssh/ssh_version
+
+ftp:
+  modules:
+    - scanner/ftp/ftp_version
+    - scanner/ftp/ftp_anonymous

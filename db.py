@@ -33,6 +33,17 @@ CREATE TABLE IF NOT EXISTS findings (
     raw_output   TEXT,              -- raw module output (safety net for unparsed data)
     timestamp    TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS services (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace  TEXT NOT NULL,       -- same workspace key as findings
+    target     TEXT NOT NULL,       -- the IP
+    port       INTEGER,             -- open port, e.g. 80
+    proto      TEXT,                -- tcp / udp
+    name       TEXT,                -- raw service name from nmap, e.g. "netbios-ssn"
+    info       TEXT,                -- version/banner, e.g. "Apache 2.2.8"
+    enumerated INTEGER DEFAULT 0    -- 1 if we ran enumeration on this service
+);
 """
 
 
@@ -48,9 +59,12 @@ def connect():
 
 
 def init_db():
-    """Creates the table if it doesn't exist yet. Safe to call every run."""
+    """Creates the tables if they don't exist yet. Safe to call every run.
+
+    executescript (not execute) because SCHEMA now holds multiple statements.
+    """
     conn = connect()
-    conn.execute(SCHEMA)
+    conn.executescript(SCHEMA)
     conn.commit()
     conn.close()
 
@@ -85,6 +99,45 @@ def save_findings(rows):
     )
     conn.commit()
     conn.close()
+
+
+def clear_services(workspace):
+    """Deletes all service rows for one workspace (replace strategy)."""
+    conn = connect()
+    conn.execute("DELETE FROM services WHERE workspace = ?", (workspace,))
+    conn.commit()
+    conn.close()
+
+
+def save_services(rows):
+    """Inserts many service rows at once.
+
+    Each dict has keys: workspace, target, port, proto, name, info, enumerated
+    """
+    conn = connect()
+    conn.executemany(
+        """
+        INSERT INTO services
+            (workspace, target, port, proto, name, info, enumerated)
+        VALUES
+            (:workspace, :target, :port, :proto, :name, :info, :enumerated)
+        """,
+        rows,
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_services(workspace):
+    """Returns all services for a workspace, ordered by port."""
+    conn = connect()
+    cur = conn.execute(
+        "SELECT * FROM services WHERE workspace = ? ORDER BY port",
+        (workspace,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
 
 
 def get_findings(workspace):
