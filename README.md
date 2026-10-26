@@ -1,8 +1,37 @@
 # Metasploit RPC API — Automation
+A small, hands-on toolkit that drives the Metasploit Framework programmatically
+(through its RPC API and CLI tools) to automate a full workflow: from finding
+open ports on a target, to enumerating its services, to generating a payload
+and catching the session — all as simple, composable Python scripts.
 
-Drive the Metasploit Framework programmatically through its RPC API (msgrpc).
-This repo contains a small automation pipeline: a fast Go port scanner feeds
-nmap, and the results are pushed straight into Metasploit over the RPC API.
+Each tool does one job and hands off to the next, so you can run the whole
+chain or just the piece you need. Results are stored in a local database and
+browsed in the terminal or a small web viewer.
+
+## Overview
+```
+ ┌─────────┐   ┌───────────┐   ┌──────────┐   ┌──────────────────┐
+ │  SCAN   │──▶│ ENUMERATE │──▶│   VIEW   │   │     EXPLOIT      │
+ └─────────┘   └───────────┘   └──────────┘   └──────────────────┘
+ ports +       read-only        terminal /     payload generation
+ services      auxiliaries      web viewer      + session handler
+ into msf      into SQLite
+```
+
+| Stage | What it does | Tools |
+|---|---|---|
+| **Scan** | Fast port scan → nmap service detection → Metasploit workspace | `portscan.go`, `scan_import.py` |
+| **Enumerate** | Run read-only auxiliary modules per service, store clean output | `enumerate.py`, `enum_modules.yaml`, `db.py` |
+| **View** | Browse the findings (ports, modules, output) | `view.py`, `app.py` |
+| **Exploit** | Interactive payload builder + matching handler | `payload_gen.py`, `handler.py` |
+
+**Data flow:**
+```
+portscan.go + scan_import.py    ─▶  msf workspace (ports + services)
+enum_modules.yaml + enumerate.py ─▶ enum_results.db (findings + services)
+view.py / app.py                ─▶  read the database
+payload_gen.py ─▶ .last_payload.json ─▶ handler.py (catches the session)
+```
 
 ---
 
@@ -20,7 +49,6 @@ nmap, and the results are pushed straight into Metasploit over the RPC API.
 
 ## Setup
 ### 1. Database
-
 Initialize (the first time):
 ```bash
 sudo msfdb init
@@ -159,7 +187,7 @@ services                 // List services (open ports) found
 vulns                    // List known vulnerabilities
 creds                    // List collected credentials
 loot                     // List collected loot (files, hashes)
-jobs                     // List backgound jobs
+jons                     // List background Jobs
 ```
 
 **Importing & Scanning**
@@ -199,7 +227,7 @@ load msgrpc ServerHost=127.0.0.1 ServerPort=55552 User=msf Pass=<PW> SSL=true
 
 ---
 
-## Scripts
+## Scan scripts
 ### smoke_test.py
 Connects to the RPC API (reading credentials from `.env`) and prints the
 Metasploit version. The quickest way to confirm the whole chain works. Run it
@@ -258,96 +286,28 @@ The temp XML file is deleted automatically at the end (even if something fails).
 - Progress goes to stderr, the port list to stdout — so `scan_import.py` reads
   the ports cleanly.
 
+**Scope:** portscan does TCP connect scans only. Service/version detection, UDP,
+and OS detection are left to nmap in step 2.
+
 ---
 
 ## Service Enumeration
-After `scan_import.py` has populated a workspace with services, `enumerate.py`
-runs enumeration auxiliary modules against each service and stores the results
-in a local SQLite database — a clean, queryable record independent of what
-Metasploit itself happens to save.
-
-### How it works
-```
-scan_import.py  →  msf workspace (ports + services via nmap -sV)
-       ↓
-enumerate.py    →  for each service, run its enumeration auxiliaries
-       ↓
-enum_results.db →  clean output of every module, one database for all targets
-```
-
-The service name from `nmap -sV` (e.g. `netbios-ssn`, `ssl/https`) is what
-decides which modules run — not the port number. So a web server on a
-non-standard port (e.g. Tomcat on 8180) is still correctly treated as HTTP, and
-SMB on both 139 and 445 is run once (identical result).
-
-Only **read-only enumeration** auxiliaries are run — no brute-force or `*_login`
-modules.
-
-### Files
-- **db.py** — the SQLite storage layer. All SQL lives here; other scripts just
-  call its functions (`init_db`, `save_findings`, `get_findings`, ...).
-- **enum_modules.yaml** — the service → modules map (data, not code).
-- **enumerate.py** — reads a workspace's services, runs the mapped auxiliaries
-  through an RPC console, cleans the output, and saves it to the database.
-
-### The database
-One file, `enum_results.db`, holds findings for **all** targets. Rows are
-separated by the `workspace` column, so many targets live in the same tables
-(`findings` and `services`):
+Once `scan_import.py` has filled a workspace with services, `enumerate.py` runs
+**read-only enumeration** auxiliary modules against each service and stores the
+clean output in a local SQLite database (`enum_results.db`) — a stable,
+queryable record of its own, independent of whatever Metasploit happens to save.
 
 ```
-workspace        target          port  service  module
-metasploitable2  192.168.25.129  22    ssh      ssh_version
-metasploitable2  192.168.25.129  139   smb      smb_enumshares
-kioptrix         192.168.X.X     22    ssh      ssh_version
+msf workspace (services)  ─▶  enumerate.py  ─▶  enum_results.db
 ```
 
-**Strategy: replace per workspace.** Re-running `enumerate.py <ws>` clears that
-workspace's old rows first, then inserts fresh ones — always a clean current
-picture. Other workspaces are untouched.
+Only enumeration modules are run (versions, shares, banners, headers). No
+brute-force or `*_login` modules — those need credentials and are attacks, not
+enumeration.
 
-Create / inspect the database directly:
-```bash
-python3 db.py        # creates enum_results.db and lists workspaces + counts
-```
-
-### Usage
-```bash
-# 1. Scan the target first (fills the workspace with services)
-python3 -u scan_import.py <target> --full --name metasploitable2
-
-# 2. See what WOULD run, without executing anything
-python3 enumerate.py metasploitable2 --dry-run
-
-# 3. Run the enumeration (stores results in enum_results.db)
-python3 enumerate.py metasploitable2
-```
-
-### Inspecting results
-Browse with `app.py` (web) — see **Viewing results**.
-Or query the database directly:
-```bash
-# All findings for a target
-sqlite3 enum_results.db \
-  "SELECT module, port FROM findings WHERE workspace='metasploitable2';"
-
-# Full output of one module
-sqlite3 enum_results.db \
-  "SELECT raw_output FROM findings WHERE module='ssh_version';"
-
-# Which modules found the most data
-sqlite3 enum_results.db \
-  "SELECT module, port, length(raw_output) AS chars
-   FROM findings WHERE workspace='metasploitable2' ORDER BY chars DESC;"
-
-# Across all targets: which ones run SSH?
-sqlite3 enum_results.db \
-  "SELECT DISTINCT workspace, target FROM findings WHERE service='ssh';"
-```
-
-### Extending the module map
-The service → auxiliaries map lives in **`enum_modules.yaml`** (data, not code),
-so you extend it without touching any script. Read-only enumeration only:
+### Which modules run — enum_modules.yaml
+The service → modules map lives in **`enum_modules.yaml`** (data, not code), so
+you extend it without touching any script:
 
 ```yaml
 smb:
@@ -366,29 +326,145 @@ ssh:
   modules:
     - scanner/ssh/ssh_version
 
-# add more, e.g.:
-# ftp:
-#   modules:
-#     - scanner/ftp/ftp_version
-#     - scanner/ftp/ftp_anonymous   # anonymous-login CHECK (enum, not brute)
-# mysql:
-#   modules:
-#     - scanner/mysql/mysql_version
+ftp:
+  modules:
+    - scanner/ftp/ftp_version
+    - scanner/ftp/ftp_anonymous   # anonymous-login CHECK (enum, not brute)
 ```
 
-Most services just work once added — `enumerate.py` matches nmap's service name
-to a YAML key directly (`ftp`, `mysql`, `smtp`…). Only odd names (like SMB's
-`netbios-ssn`) need a line in `SERVICE_ALIASES` in `enumerate.py`. A service
-with no mapping is skipped (visible in `--dry-run`).
+Each service key takes a `modules:` list and an optional `no_rport: true` (for
+modules that manage their own port and reject a RPORT option, like SMB).
 
-> ⚠️ Verify a module exists before adding it:
+**Adding a service is usually just a YAML entry.** `enumerate.py` matches an
+nmap service name to a YAML key in three steps: a few aliases for odd names
+(`netbios-ssn → smb`, `ssl/https → https`), then `http`/`https` substrings,
+then a **direct match** — if nmap's name is already a YAML key (`ftp`, `mysql`,
+`smtp`, `telnet`, `vnc`…), it just works. Only genuinely odd names need a line
+added to `SERVICE_ALIASES` in `enumerate.py`.
+
+> ⚠️ **Verify a module exists before adding it.** List what's available with
 > `ls /usr/share/metasploit-framework/modules/auxiliary/scanner/<service>/`.
 > Keep `*_login` / brute-force modules out — enumeration only.
 
-### Dependencies
-Enumeration adds `pyyaml` (for the config); storage uses Python's built-in
-`sqlite3` (no package). All Python deps are in `requirements.txt`. The `sqlite3`
-CLI is handy for inspecting the DB:
+### How it decides what to scan
+The **service name** (from `nmap -sV`), not the port number, decides which
+modules run — so a web server on a non-standard port (e.g. Tomcat on 8180) is
+still correctly enumerated as HTTP, and SMB on both 139 and 445 is run once
+(identical result).
+
+### Usage
 ```bash
-sudo apt install sqlite3   # optional, for the command-line viewer
+# 0. (first) scan the target so the workspace has services
+python3 -u scan_import.py <target> --full --name metasploitable2
+
+# 1. dry run — show what WOULD run, execute nothing
+python3 enumerate.py metasploitable2 --dry-run
+
+# 2. real run — execute and store results in enum_results.db
+python3 enumerate.py metasploitable2
+```
+
+To add a service, re-run the whole enumeration (replace strategy — see below);
+it re-runs everything including the new modules.
+
+### The database
+One file, `enum_results.db`, holds **all** targets. Rows are separated by the
+`workspace` column, so many targets live in the same tables (`findings` and
+`services`):
+
+```
+workspace        target          port  service  module
+metasploitable2  192.168.25.129  22    ssh      ssh_version
+metasploitable2  192.168.25.129  139   smb      smb_enumshares
+kioptrix         192.168.X.X     22    ssh      ssh_version
+```
+
+**Strategy: replace per workspace.** Re-running `enumerate.py <ws>` clears that
+workspace's old rows first, then inserts fresh ones — always a clean current
+picture, no duplicates. Other workspaces are untouched.
+
+The database is created automatically on first run — no setup needed. Inspect
+it directly if you like:
+
+```bash
+python3 db.py                                    # list workspaces + counts
+sqlite3 enum_results.db \
+  "SELECT module, port FROM findings WHERE workspace='metasploitable2';"
+```
+
+> **Note on msf vs this database.** The msf workspace keeps whatever each module
+> decides to save (some vulns, creds, loot — inconsistent). `enum_results.db`
+> keeps the **full clean output** of every module, in one place, under your
+> control. They overlap but aren't the same.
+
+---
+
+## Viewing results
+Two read-only viewers read `enum_results.db` (neither touches msf):
+
+### view.py — terminal
+Quick look without a browser. Colored ports table + each module's output.
+
+```bash
+python3 view.py                 # list all workspaces
+python3 view.py metasploitable2 # ports + findings for one target
+```
+
+### app.py — web viewer
+A small Flask app with a dark, terminal-style theme.
+
+```bash
+python3 app.py                  # then open http://127.0.0.1:5000
+```
+
+- **Home** — list of all targets (workspaces).
+- **Target page** — a stats line (`N ports · N enumerated · N modules ·
+  N found · N failed`), an **Open Ports** table marking which ports were
+  enumerated (● / ○), and each module's result as a card you can expand.
+- Each result is badged **found** / **failed** / **ok** from its output markers
+  (`[+]` / `[-]`), so failures stand out at a glance.
+- A live search box filters the result cards (service, module, port, or text).
+- Service badges are colored automatically from the service name, so new
+  services you add to the YAML get their own color with no CSS change.
+
+---
+
+## Payload & Handler
+Two scripts for the exploitation side: generate a payload interactively, then
+start a matching handler that catches the session when the payload runs. The
+handler reads the payload's settings automatically, so you don't retype them.
+
+```
+payload_gen.py  ─▶  .last_payload.json  ─▶  handler.py
+  (builds payload)    (saved settings)       (listens for the connection)
+```
+
+### payload_gen.py — interactive msfvenom
+A menu-driven wizard that walks you through each choice and runs `msfvenom`
+for you. Menu-based so you can't pick invalid combinations; LHOST/LPORT/filename
+are validated free input.
+
+```bash
+python3 payload_gen.py
+```
+
+Steps: platform → payload (filtered by platform) → LHOST (your LAN IP is
+suggested) → LPORT → format (filtered by platform) → optional encoder → output
+file. Generated payloads are saved under `payloads/` (gitignored), and the
+settings are written to `.last_payload.json` for the handler.
+
+> **On encoders:** they help avoid bad characters, but they do **not** reliably
+> evade modern antivirus — `shikata_ga_nai` in particular is heavily signatured.
+> `none` is the sensible default.
+
+### handler.py — matching listener
+Reads `.last_payload.json`, builds a `multi/handler` resource script with the
+matching payload/LHOST/LPORT, and launches an interactive msfconsole. When the
+payload connects, the session opens right there.
+
+```bash
+python3 handler.py            # use the last payload's settings
+python3 handler.py --show     # print the settings/resource script, don't launch
+# override if needed:
+python3 handler.py -p <payload> --lhost <ip> --lport <port>
 ```
