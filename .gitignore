@@ -6,3 +6,6 @@ portscan
 
 enum_results.db
 __pycache__/
+
+payloads/
+.last_payload.json

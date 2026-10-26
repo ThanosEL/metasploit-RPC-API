@@ -159,6 +159,7 @@ services                 // List services (open ports) found
 vulns                    // List known vulnerabilities
 creds                    // List collected credentials
 loot                     // List collected loot (files, hashes)
+jobs                     // List backgound jobs
 ```
 
 **Importing & Scanning**
