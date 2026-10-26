@@ -257,3 +257,110 @@ The temp XML file is deleted automatically at the end (even if something fails).
 - Progress goes to stderr, the port list to stdout — so `scan_import.py` reads
   the ports cleanly.
 
+---
+
+## Service Enumeration
+After `scan_import.py` has populated a workspace with services, `enumerate.py`
+runs enumeration auxiliary modules against each service and stores the results
+in a local SQLite database — a clean, queryable record independent of what
+Metasploit itself happens to save.
+
+### How it works
+```
+scan_import.py  →  msf workspace (ports + services via nmap -sV)
+       ↓
+enumerate.py    →  for each service, run its enumeration auxiliaries
+       ↓
+enum_results.db →  clean output of every module, one database for all targets
+```
+
+The service name from `nmap -sV` (e.g. `netbios-ssn`, `ssl/https`) is what
+decides which modules run — not the port number. So a web server on a
+non-standard port (e.g. Tomcat on 8180) is still correctly treated as HTTP.
+
+Only **read-only enumeration** auxiliaries are run — no brute-force or login
+modules.
+
+### Files
+- **db.py** — the SQLite storage layer. All SQL lives here; other scripts just
+  call its functions (`init_db`, `save_findings`, `get_findings`, ...).
+- **enumerate.py** — reads a workspace's services, runs the mapped auxiliaries
+  through an RPC console, cleans the output, and saves it to the database.
+
+### The database
+One file, `enum_results.db`, holds findings for **all** targets. Rows are
+separated by the `workspace` column, so many targets live in the same table:
+
+```
+workspace        target          port  service  module          ...
+metasploitable2  192.168.25.129  22    ssh      ssh_version
+metasploitable2  192.168.25.129  80    http     dir_scanner
+kioptrix         192.168.X.X     22    ssh      ssh_version
+```
+
+**Strategy: replace per workspace.** Re-running `enumerate.py <ws>` clears that
+workspace's old rows first, then inserts fresh ones — always a clean current
+picture. Other workspaces are untouched.
+
+Create / inspect the database directly:
+```bash
+python3 db.py        # creates enum_results.db and lists workspaces + counts
+```
+
+### Usage
+```bash
+# 1. Scan the target first (fills the workspace with services)
+python3 -u scan_import.py <target> --full --name metasploitable2
+
+# 2. See what WOULD run, without executing anything
+python3 enumerate.py metasploitable2 --dry-run
+
+# 3. Run the enumeration (stores results in enum_results.db)
+python3 enumerate.py metasploitable2
+```
+
+### Inspecting results (until view.py exists)
+```bash
+# All findings for a target
+sqlite3 enum_results.db \
+  "SELECT module, port FROM findings WHERE workspace='metasploitable2';"
+
+# Full output of one module
+sqlite3 enum_results.db \
+  "SELECT raw_output FROM findings WHERE module='ssh_version';"
+
+# Which modules found the most data
+sqlite3 enum_results.db \
+  "SELECT module, port, length(raw_output) AS chars
+   FROM findings WHERE workspace='metasploitable2' ORDER BY chars DESC;"
+
+# Across all targets: which ones run SSH?
+sqlite3 enum_results.db \
+  "SELECT DISTINCT workspace, target FROM findings WHERE service='ssh';"
+```
+
+### Extending the module map
+The service → auxiliaries map lives in `enumerate.py` as `ENUM_MODULES`. Add
+services and modules as needed (read-only enumeration only):
+
+```python
+ENUM_MODULES = {
+    "smb":  ["scanner/smb/smb_version", "scanner/smb/smb_enumshares", ...],
+    "http": ["scanner/http/http_version", "scanner/http/dir_scanner", ...],
+    "ssh":  ["scanner/ssh/ssh_version"],
+    # add more, e.g.:
+    # "ftp":   ["scanner/ftp/ftp_version", "scanner/ftp/anonymous"],
+    # "smtp":  ["scanner/smtp/smtp_version", "scanner/smtp/smtp_enum"],
+    # "mysql": ["scanner/mysql/mysql_version"],
+}
+```
+
+If a service has no mapping, it's skipped (shown in `--dry-run`). New service
+names may need a line in `normalize_service()` so they map to a known key.
+
+### Dependencies
+Only Python's built-in `sqlite3` (no extra package). The `sqlite3` CLI is handy
+for inspecting the DB:
+```bash
+sudo apt install sqlite3   # optional, for the command-line viewer
+```

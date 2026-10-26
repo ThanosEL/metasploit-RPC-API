@@ -4,3 +4,5 @@
 *.xml
 portscan
 
+enum_results.db
+__pycache__/
