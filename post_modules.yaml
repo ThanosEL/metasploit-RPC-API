@@ -3,19 +3,44 @@ linux:
   - post/linux/gather/enum_configs       # service config files
   - post/linux/gather/enum_network       # interfaces, routes, connections
   - post/linux/gather/enum_users_history # shell history, sudoers
+  - post/linux/gather/enum_protections   # AV / security tools present
+  - post/linux/gather/checkcontainer     # docker / lxc / container?
   - post/linux/gather/hashdump           # /etc/shadow hashes (needs root)
 
 windows:
+  # ── situational awareness (low priv) ──
+  - post/windows/gather/checkvm              # is it a VM?
+  - post/windows/gather/win_privs            # current user privileges
   - post/windows/gather/enum_logged_on_users
   - post/windows/gather/enum_applications
-  - post/windows/gather/checkvm          # is it a VM?
+  - post/windows/gather/enum_patches         # missing patches -> privesc hints
+  - post/windows/gather/enum_services
   - post/windows/gather/enum_shares
-  - post/windows/gather/hashdump         # SAM hashes (needs SYSTEM)
+  - post/windows/gather/enum_av              # AV products present
+  - post/windows/gather/enum_computers       # other machines seen
+  - post/windows/gather/enum_proxy
+  - post/windows/gather/tcpnetstat           # active connections
+
+  # ── credentials (need admin / SYSTEM) ──
+  - post/windows/gather/credentials/credential_collector
+  - post/windows/gather/hashdump             # SAM hashes
+  - post/windows/gather/smart_hashdump       # better SAM dump
+  - post/windows/gather/cachedump            # cached domain creds
+  - post/windows/gather/lsa_secrets          # LSA secrets
+
+  # ── Active Directory (need domain-joined host) ──
+  - post/windows/gather/enum_domain          # domain name, DC
+  - post/windows/gather/enum_domain_users
+  - post/windows/gather/enum_domain_group_users
+  - post/windows/gather/enum_domain_tokens
+  - post/windows/gather/enum_ad_users
+  - post/windows/gather/enum_ad_computers
+  - post/windows/gather/enum_ad_groups
+  - post/windows/gather/enum_ad_service_principal_names  # Kerberoast targets
+  - post/windows/gather/enum_ad_managedby_groups
+  - post/windows/gather/enum_ad_user_comments  # passwords sometimes live here
+  - post/windows/gather/bloodhound           # collects BloodHound data
+  - post/windows/gather/resolve_sid
 
 osx:
   - post/osx/gather/enum_osx
-
-# Modules that work on any platform
-multi:
-  - post/multi/gather/env                        # environment variables
-  - post/multi/recon/local_exploit_suggester     # privesc paths — very useful!
