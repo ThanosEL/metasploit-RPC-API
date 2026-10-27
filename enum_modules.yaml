@@ -4,12 +4,14 @@ smb:
     - scanner/smb/smb_version
     - scanner/smb/smb_enumshares
     # - scanner/smb/smb_enumusers   # disabled: uses SAMR, fails on old Samba
+    - scanner/smb/smb_lookupsid
 
 http:
   modules:
     - scanner/http/http_version
     - scanner/http/http_header
     - scanner/http/robots_txt
+    - scanner/http/options
     # web directory brute-forcing is done separately (gobuster/ffuf), not here
 
 https:
@@ -17,6 +19,8 @@ https:
     - scanner/http/http_version
     - scanner/http/http_header
     - scanner/http/robots_txt
+    - scanner/http/cert
+    - scanner/http/ssl
 
 ssh:
   modules:
@@ -26,3 +30,36 @@ ftp:
   modules:
     - scanner/ftp/ftp_version
     - scanner/ftp/ftp_anonymous
+
+mysql:
+  modules:
+    - scanner/mysql/mysql_version
+
+smtp:
+  modules:
+    - scanner/smtp/smtp_version
+    - scanner/smtp/smtp_enum
+
+pop3:
+  modules:
+    - scanner/pop3/pop3_version
+
+rdp:
+  modules:
+    - scanner/rdp/rdp_scanner
+
+mssql:
+  modules:
+    - scanner/mssql/mssql_version
+    - scanner/mssql/mssql_ping
+
+redis:
+  modules:
+    - scanner/redis/redis_server
+
+winrm:
+  modules:
+    - scanner/winrm/winrm_auth_methods
+
+
+
